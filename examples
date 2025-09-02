@@ -15,11 +15,3 @@ F   = f_total(s, p, w_s=0.7, w_p=0.3)                # 総合スコアF_Total
 alert, z = two_second_precursor(loss, rate_hz=5)     # 2秒前駆
 
 print(f"θ={phi:.3f}, Ṡ={s:.3f}, P={p:.3f}, F={F:.3f}, precursor={alert}, z={z:.2f}")
-```
-
----
-
-### 実行方法
-
-```bash
-python examples/quickstart.py
