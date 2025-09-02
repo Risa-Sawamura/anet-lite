@@ -94,7 +94,7 @@ print(phi, F, alert, z)
 
 MIT License
 Questions / Issues: [GitHub Issues](https://github.com/Risa-Sawamura/anet-lite/issues)
-X(Twitter): [@risa-sawamura](https://twitter.com/)
+X(Twitter)
 
 ---
 
