@@ -1,0 +1,95 @@
+# anet_lite.py
+from __future__ import annotations
+import numpy as np
+from dataclasses import dataclass
+from typing import Sequence, Tuple
+
+EPS = 1e-12
+
+def _power_spectrum(x: Sequence[float], nfft: int | None = None) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    if x.size == 0:
+        return np.array([1.0])
+    if nfft is None:
+        nfft = 1 << max(1, (x.size - 1).bit_length())
+    S = np.abs(np.fft.rfft(x - x.mean(), n=nfft)) ** 2
+    S = S / (S.sum() + EPS)
+    return S
+
+def _jsd(p: np.ndarray, q: np.ndarray) -> float:
+    p = p / (p.sum() + EPS)
+    q = q / (q.sum() + EPS)
+    m = (p + q) / 2.0
+    def _kl(a, b):
+        a = np.clip(a, EPS, 1.0); b = np.clip(b, EPS, 1.0)
+        return float(np.sum(a * np.log(a / b)))
+    return 0.5 * _kl(p, m) + 0.5 * _kl(q, m)
+
+def theta_consistency(noise_seq: Sequence[float], ref_seq: Sequence[float], beta: float = 3.0) -> float:
+    """ϑ: 指紋の整合（0..1）。1に近いほど正常・同一運転。"""
+    p = _power_spectrum(noise_seq)
+    q = _power_spectrum(ref_seq)
+    return float(np.exp(-beta * _jsd(p, q)))
+
+def entropy_rate(values: Sequence[float], window: int = 32) -> float:
+    """Ṡ: 直近窓と一つ前窓のエントロピー差。>0: 混乱増 / <0: 収束。"""
+    v = np.asarray(values, dtype=float)
+    if v.size < window * 2:
+        return 0.0
+    bins = max(8, int(np.sqrt(window)))
+    h1, _ = np.histogram(v[-window:], bins=bins, density=True)
+    h0, _ = np.histogram(v[-2*window:-window], bins=bins, density=True)
+    def H(h):
+        p = h / (h.sum() + EPS)
+        return -float(np.sum(np.where(p > 0, p * np.log(p), 0.0)))
+    return H(h1) - H(h0)
+
+def processivity(grad_norms: Sequence[float], step_norms: Sequence[float]) -> float:
+    """P: 勾配と更新の整合（-1..1）。+側ほど“仕事”になっている。"""
+    g = np.asarray(grad_norms, dtype=float)
+    s = np.asarray(step_norms, dtype=float)
+    if g.size == 0 or s.size == 0:
+        return 0.0
+    num = float(np.dot(g, s))
+    den = float(np.linalg.norm(g) * np.linalg.norm(s) + EPS)
+    return num / den
+
+def f_total(s_dot: float, p: float, w_s: float = 1.0, w_p: float = 1.0) -> float:
+    """F_Total = w_s·Ṡ + w_p·P"""
+    return w_s * float(s_dot) + w_p * float(p)
+
+def two_second_precursor(series: Sequence[float], rate_hz: int = 10, window_sec: float = 2.0, z: float = 2.5) -> Tuple[bool, float]:
+    """2秒前駆: 直近平均のzスコアが閾値超でTrue。"""
+    w = max(1, int(rate_hz * window_sec))
+    x = np.asarray(series, dtype=float)
+    if x.size < 2 * w:
+        return False, 0.0
+    recent = float(np.mean(x[-w:]))
+    base = x[:-w]
+    mu, sigma = float(np.mean(base)), float(np.std(base) + EPS)
+    score = (recent - mu) / sigma
+    return bool(score > z), float(score)
+
+# 便利：まとめて一括計算
+@dataclass
+class ANETSnapshot:
+    theta: float
+    sdot: float
+    proc: float
+    f_total: float
+    precursor: bool
+    zscore: float
+
+def snapshot(loss_hist: Sequence[float],
+             grad_norms: Sequence[float],
+             step_norms: Sequence[float],
+             noise_seq: Sequence[float],
+             ref_seq: Sequence[float],
+             w_s: float = 0.7, w_p: float = 0.3,
+             rate_hz: int = 5) -> ANETSnapshot:
+    sdot = entropy_rate(loss_hist)
+    proc = processivity(grad_norms, step_norms)
+    F = f_total(sdot, proc, w_s, w_p)
+    th = theta_consistency(noise_seq, ref_seq)
+    pre, z = two_second_precursor(loss_hist, rate_hz=rate_hz)
+    return ANETSnapshot(th, sdot, proc, F, pre, z)
